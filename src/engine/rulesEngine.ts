@@ -649,13 +649,16 @@ export function resolveCoC7eOpposedCombat(
   defenseMode: 'fight_back' | 'dodge' = 'dodge',
   baseDamageFormula = '1d6+1',
   canImpale = true,
-  rng: DeterministicRNG = getGlobalRng()
+  rng: DeterministicRNG = getGlobalRng(),
+  attackSkill?: number
 ): CoC7eOpposedCombatResolution {
-  const atkSkill = attacker.stats.skills?.['Fighting (Brawl)'] ?? 60;
+  // Imported books name the skill 'Fighting: Brawl'; 'Fighting (Brawl)' is the built-in encounter spelling.
+  const atkSkill =
+    attackSkill ?? attacker.stats.skills?.['Fighting: Brawl'] ?? attacker.stats.skills?.['Fighting (Brawl)'] ?? 60;
   const defSkill =
     defenseMode === 'dodge'
       ? defender.stats.skills?.['Dodge'] ?? 45
-      : defender.stats.skills?.['Fighting (Brawl)'] ?? 50;
+      : defender.stats.skills?.['Fighting: Brawl'] ?? defender.stats.skills?.['Fighting (Brawl)'] ?? 50;
 
   const attackerCheck = resolveCoC7eCheck({ skill: atkSkill, rng });
   const defenderCheck = resolveCoC7eCheck({ skill: defSkill, rng });

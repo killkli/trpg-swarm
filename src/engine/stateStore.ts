@@ -848,7 +848,9 @@ export function stepCombatTurn(
       'dodge',
       action.damageFormula ?? '1d6+1',
       true,
-      rng
+      rng,
+      // attackBonus is a percentage only for weapons imported with a named CoC skill (the built-in roster uses a d20 bonus).
+      action.cocSkillName ? action.attackBonus : undefined
     );
     let sanNarrative = '';
     if (actor.faction === 'enemy' && target.faction === 'party') {

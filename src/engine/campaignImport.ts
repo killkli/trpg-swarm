@@ -154,9 +154,10 @@ function slugify(name: string): string {
  * Parses range notations ("5 ft", "100/400 ft", "15 yds", "80/320 ft") into grid
  * tiles at 1 tile = 5 ft; yard values count as ~3 ft per yard. Longest range wins.
  */
-function rangeToTiles(rangeStr?: string): number {
+function rangeToTiles(rangeStr?: string | number): number {
+  if (typeof rangeStr === 'number') return rangeStr;
   if (!rangeStr) return 1;
-  const match = rangeStr.match(/(\d+)\s*(?:\/\s*(\d+))?\s*(ft|yds|yd)/i);
+  const match = String(rangeStr).match(/(\d+)\s*(?:\/\s*(\d+))?\s*(ft|yds|yd)/i);
   if (!match) return 1;
   const unit = match[3].toLowerCase().startsWith('yd') ? 3 : 5;
   const longest = Number(match[2] ?? match[1]);

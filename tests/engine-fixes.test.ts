@@ -8,8 +8,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { campaignBookToWorldState } from '../src/engine/campaignImport.ts';
-import { absorbTempHp, adjustDamageForType, applyCoC7eDamage, resolveDnD5eSavingThrow } from '../src/engine/rulesEngine.ts';
+import { resolveCoC7eOpposedCombat, absorbTempHp, adjustDamageForType, applyCoC7eDamage, resolveDnD5eSavingThrow } from '../src/engine/rulesEngine.ts';
+import { DeterministicRNG } from '../src/engine/dice.ts';
+import { resolvePbtALastBreath } from '../src/engine/pbtaLastBreath.ts';
 import { adjustCombatant, stepCombatTurn } from '../src/engine/stateStore.ts';
+import { carryPartyIntoScene } from '../src/engine/sceneCarry.ts';
 
 import { existsSync } from 'node:fs';
 
@@ -177,5 +180,71 @@ for (let i = 0; i < 20 && faller.hp > 0; i++) {
 }
 assert.equal(faller.hp, 0);
 assert.equal(faller.deathSaves?.isStable, false, 'second drop resets stability');
+
+// 11. Opposed combat reads the book's 'Fighting: Brawl' key and the weapon's own skill, not a hidden default.
+// A roll of 01 always succeeds, so count wins over many trials: a 0% skill wins ~1%, the old 60% default ~60%.
+{
+  const world = campaignBookToWorldState(load('arkham-shadow'), 3);
+  const [a, d] = Object.values(world.combatants).filter((c) => c.faction === 'party');
+  d.stats.skills = { Dodge: 0 };
+  const attackerWins = (weaponSkill?: number) => {
+    let wins = 0;
+    for (let i = 0; i < 200; i++) {
+      d.hp = d.maxHp;
+      wins += resolveCoC7eOpposedCombat(a, d, 'dodge', '1d6', true, undefined, weaponSkill).winner === 'attacker' ? 1 : 0;
+    }
+    return wins;
+  };
+  a.stats.skills = { 'Fighting: Brawl': 0 };
+  assert.ok(attackerWins() <= 20, "a 0% 'Fighting: Brawl' is used, not a default");
+  a.stats.skills = { 'Fighting: Brawl': 99 };
+  assert.ok(attackerWins(0) <= 20, 'an explicit weapon skill overrides the sheet');
+}
+
+// 12. PbtA Last Breath is a flat 2d6 (no modifier): 10+ cheats death, 7-9 bargains, 6- dies.
+{
+  const seen = new Set<string>();
+  for (let seed = 1; seed <= 300; seed++) {
+    const r = resolvePbtALastBreath(new DeterministicRNG(seed));
+    assert.ok(r.total >= 2 && r.total <= 12, 'flat 2d6 range');
+    assert.equal(r.tier, r.total >= 10 ? '10+ (Cheat Death)' : r.total >= 7 ? '7-9 (Bargain)' : '6- (Death)');
+    seen.add(r.tier);
+  }
+  assert.equal(seen.size, 3, 'all three outcomes occur');
+}
+
+// 13. Carrying the party into the next scene keeps their state, resets position, and swaps the enemies.
+{
+  const book = load('arkham-shadow');
+  const prev = campaignBookToWorldState(book, 7, 'scene-1-miskatonic-archive');
+  const partyIds = Object.values(prev.combatants).filter((c) => c.faction === 'party').map((c) => c.id);
+  const [hurt, dead, dyingId] = partyIds;
+  prev.combatants[hurt].hp = 3;
+  prev.combatants[hurt].position = { x: 9, y: 9 };
+  prev.combatants[dead].hp = 0;
+  prev.combatants[dead].isAlive = false;
+  prev.combatants[dyingId].conditions.push('dying');
+  const enemyBefore = Object.values(prev.combatants).filter((c) => c.faction !== 'party').map((c) => c.id);
+
+  const next = campaignBookToWorldState(book, 7, 'scene-2-riverside-boarding-house');
+  const newPositionOfHurt = next.combatants[hurt].position;
+  const warnings = carryPartyIntoScene(prev, next);
+
+  assert.equal(next.combatants[hurt].hp, 3, 'party HP carries over');
+  assert.deepEqual(next.combatants[hurt].position, newPositionOfHurt, 'position comes from the new scene');
+  assert.equal(next.combatants[dead].isAlive, false, 'dead stays dead');
+  assert.ok(!next.initiativeOrder.includes(dead), 'dead member takes no turns');
+  assert.ok(next.combatants[dyingId].conditions.includes('dying'), 'dying carries over');
+  assert.equal(warnings.length, 1, 'a dying member produces one warning');
+  for (const id of enemyBefore) assert.ok(!next.combatants[id], `old enemy ${id} left behind`);
+  assert.equal(next.episodicLog.at(-1)?.actionType, 'scene-transition');
+  assert.equal(next.rngSeed, prev.rngSeed);
+
+  const otherSystem = campaignBookToWorldState(load('crimson-crypt'), 7);
+  assert.throws(() => carryPartyIntoScene(prev, otherSystem), /rule system differs/);
+  const mismatched = campaignBookToWorldState(book, 7, 'scene-2-riverside-boarding-house');
+  delete mismatched.combatants[hurt];
+  assert.throws(() => carryPartyIntoScene(prev, mismatched), /party differs/);
+}
 
 console.log('engine-fixes: all assertions passed');

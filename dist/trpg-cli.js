@@ -596,9 +596,9 @@ function clearDowned(c) {
   c.conditions = c.conditions.filter((x) => x !== "unconscious" && x !== "dying");
   c.deathSaves = { successes: 0, failures: 0, isStable: true };
 }
-function resolveCoC7eOpposedCombat(attacker, defender, defenseMode = "dodge", baseDamageFormula = "1d6+1", canImpale = true, rng = getGlobalRng()) {
-  const atkSkill = attacker.stats.skills?.["Fighting (Brawl)"] ?? 60;
-  const defSkill = defenseMode === "dodge" ? defender.stats.skills?.["Dodge"] ?? 45 : defender.stats.skills?.["Fighting (Brawl)"] ?? 50;
+function resolveCoC7eOpposedCombat(attacker, defender, defenseMode = "dodge", baseDamageFormula = "1d6+1", canImpale = true, rng = getGlobalRng(), attackSkill) {
+  const atkSkill = attackSkill ?? attacker.stats.skills?.["Fighting: Brawl"] ?? attacker.stats.skills?.["Fighting (Brawl)"] ?? 60;
+  const defSkill = defenseMode === "dodge" ? defender.stats.skills?.["Dodge"] ?? 45 : defender.stats.skills?.["Fighting: Brawl"] ?? defender.stats.skills?.["Fighting (Brawl)"] ?? 50;
   const attackerCheck = resolveCoC7eCheck({ skill: atkSkill, rng });
   const defenderCheck = resolveCoC7eCheck({ skill: defSkill, rng });
   let winner = "none";
@@ -1862,7 +1862,9 @@ function stepCombatTurn(state, overrideActorId, temperature = 0.65, preferredAct
       "dodge",
       action.damageFormula ?? "1d6+1",
       true,
-      rng
+      rng,
+      // attackBonus is a percentage only for weapons imported with a named CoC skill (the built-in roster uses a d20 bonus).
+      action.cocSkillName ? action.attackBonus : void 0
     );
     let sanNarrative = "";
     if (actor.faction === "enemy" && target.faction === "party") {
@@ -2040,8 +2042,9 @@ function slugify(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "action";
 }
 function rangeToTiles(rangeStr) {
+  if (typeof rangeStr === "number") return rangeStr;
   if (!rangeStr) return 1;
-  const match = rangeStr.match(/(\d+)\s*(?:\/\s*(\d+))?\s*(ft|yds|yd)/i);
+  const match = String(rangeStr).match(/(\d+)\s*(?:\/\s*(\d+))?\s*(ft|yds|yd)/i);
   if (!match) return 1;
   const unit = match[3].toLowerCase().startsWith("yd") ? 3 : 5;
   const longest = Number(match[2] ?? match[1]);
@@ -2391,6 +2394,64 @@ function importWorldState(filePath, seed = 42, sceneOverride) {
   return campaignBookToWorldState(raw, seed, sceneOverride);
 }
 
+// src/engine/pbtaLastBreath.ts
+function resolvePbtALastBreath(rng = getGlobalRng()) {
+  const total = rollDice("2d6", rng).total;
+  if (total >= 10) {
+    return {
+      total,
+      tier: "10+ (Cheat Death)",
+      narrative: `\u5F4C\u7559\u4E4B\u969B (2d6 = ${total})\uFF1A\u301010+\u3011\u6B3A\u9A19\u4E86\u6B7B\u795E\uFF0C\u7015\u5371\u4F46\u7A69\u5B9A\uFF081 HP\uFF09\u3002`
+    };
+  }
+  if (total >= 7) {
+    return {
+      total,
+      tier: "7-9 (Bargain)",
+      narrative: `\u5F4C\u7559\u4E4B\u969B (2d6 = ${total})\uFF1A\u30107-9\u3011\u6B7B\u795E\u958B\u50F9\u3002\u63A5\u53D7\u4EA4\u6613\uFF08\u70D9\u5370\u3001\u4F7F\u547D\u6216\u4EE3\u50F9\uFF09\u5C31\u7A69\u5B9A\u4E0B\u4F86\uFF0C\u62D2\u7D55\u5247\u8E0F\u5165\u9ED1\u9580\u3002`
+    };
+  }
+  return {
+    total,
+    tier: "6- (Death)",
+    narrative: `\u5F4C\u7559\u4E4B\u969B (2d6 = ${total})\uFF1A\u30106-\u3011\u547D\u904B\u5DF2\u5B9A\uFF0C\u6B7B\u795E\u5E36\u8D70\u9748\u9B42\u3002`
+  };
+}
+
+// src/engine/sceneCarry.ts
+function carryPartyIntoScene(previous, next) {
+  if (previous.ruleSystem !== next.ruleSystem) {
+    throw new Error(`--carry: rule system differs (${previous.ruleSystem} vs ${next.ruleSystem}).`);
+  }
+  const oldIds = Object.values(previous.combatants).filter((c) => c.faction === "party").map((c) => c.id);
+  const newIds = Object.values(next.combatants).filter((c) => c.faction === "party").map((c) => c.id);
+  const missing = newIds.filter((id) => !oldIds.includes(id));
+  const extra = oldIds.filter((id) => !newIds.includes(id));
+  if (missing.length || extra.length) {
+    throw new Error(
+      `--carry: party differs between the save and the scene (not in save: ${missing.join(", ") || "-"}; not in scene: ${extra.join(", ") || "-"}).`
+    );
+  }
+  const warnings = [];
+  for (const id of newIds) {
+    const old = previous.combatants[id];
+    next.combatants[id] = { ...structuredClone(old), position: next.combatants[id].position };
+    if (old.conditions.includes("dying")) warnings.push(`${old.name} is still dying; the condition carries over.`);
+  }
+  next.initiativeOrder = next.initiativeOrder.filter((id) => next.combatants[id].isAlive);
+  next.rngSeed = previous.rngSeed;
+  next.episodicLog = previous.episodicLog;
+  next.workingMemory = previous.workingMemory;
+  next.semanticFacts = previous.semanticFacts;
+  recordEpisodicEvent(next, {
+    actorId: "system",
+    actorName: "System",
+    actionType: "scene-transition",
+    narrativeSummary: `\u968A\u4F0D\u9032\u5165\u5834\u666F\uFF1A${next.sceneName}`
+  });
+  return warnings;
+}
+
 // scripts/trpg-cli.ts
 var DEFAULT_STATE_PATH = "./campaign-state.json";
 var EXAMPLE_ALIASES = {
@@ -2399,7 +2460,29 @@ var EXAMPLE_ALIASES = {
   dnd5e: "dnd5e/crimson-crypt.json",
   "arkham-shadow": "coc7e/arkham-shadow.json",
   arkham: "coc7e/arkham-shadow.json",
-  coc7e: "coc7e/arkham-shadow.json"
+  coc7e: "coc7e/arkham-shadow.json",
+  "haunting-corbitt": "campaign-haunting-corbitt.json",
+  haunting: "campaign-haunting-corbitt.json",
+  corbitt: "campaign-haunting-corbitt.json",
+  "goblin-hole": "pbta/goblin-hole.json",
+  goblin: "pbta/goblin-hole.json",
+  pbta: "pbta/goblin-hole.json",
+  "gilliard-mound": "dnd5e/gilliard-mound.json",
+  gilliard: "dnd5e/gilliard-mound.json",
+  wolfclan: "dnd5e/gilliard-mound.json",
+  "randolph-carter": "coc7e/randolph-carter.json",
+  carter: "coc7e/randolph-carter.json",
+  "cypress-crypt": "coc7e/randolph-carter.json",
+  "morgansfort": "dnd5e/morgansfort.json",
+  fort: "dnd5e/morgansfort.json",
+  "island-fortress": "dnd5e/morgansfort.json",
+  "colour-out-of-space": "coc7e/colour-out-of-space.json",
+  colour: "coc7e/colour-out-of-space.json",
+  "blasted-heath": "coc7e/colour-out-of-space.json",
+  "erich-zann": "coc7e/erich-zann.json",
+  zann: "coc7e/erich-zann.json",
+  "sky-chain": "pbta/sky-chain.json",
+  skychain: "pbta/sky-chain.json"
 };
 function parseCliArgs(argv) {
   const args = argv.slice(2);
@@ -2455,6 +2538,8 @@ function resolveExampleFile(requested) {
   if (relativeFromAlias) {
     const p = path3.resolve(rootDir, "examples", relativeFromAlias);
     if (fs3.existsSync(p)) return p;
+    const moved = path3.resolve(rootDir, "campaigns", path3.basename(relativeFromAlias).replace(/^campaign-/, ""));
+    if (fs3.existsSync(moved)) return moved;
   }
   const examplesDir = path3.resolve(rootDir, "examples");
   const candidateBaseNames = [
@@ -2540,7 +2625,9 @@ function main() {
       if (example) {
         const examplePath = resolveExampleFile(String(example));
         const state2 = importWorldState(examplePath, seed ?? 42, flags.scene);
+        const carryWarnings = flags.carry ? carryPartyIntoScene(loadWorldState(String(flags.carry)), state2) : [];
         saveWorldState(statePath, state2);
+        for (const w of carryWarnings) console.error(`[TRPG-CLI Warning] ${w}`);
         const summaryObj2 = {
           status: "initialized",
           fromExample: path3.basename(examplePath),
@@ -2601,7 +2688,26 @@ function main() {
       }
       system = system ?? "coc7e";
       if (system === "coc7e") {
-        const skillRaw = flags.skill;
+        const statePath2 = flags.state ?? DEFAULT_STATE_PATH;
+        const actorState = flags.actor ? loadWorldState(statePath2) : void 0;
+        const actorId = actorState ? resolveActorId(actorState, String(flags.actor)) : void 0;
+        const actor = actorState && actorId ? actorState.combatants[actorId] : void 0;
+        if (flags.actor && !actor) throw new Error(`--actor "${String(flags.actor)}" not found in ${statePath2}.`);
+        let skillRaw = flags.skill;
+        if (actor && skillRaw === void 0 && flags["skill-name"] !== void 0) {
+          const wanted = String(flags["skill-name"]).toLowerCase();
+          const found = Object.entries(actor.stats.skills ?? {}).find(([k]) => k.toLowerCase() === wanted);
+          if (!found) {
+            throw new Error(
+              `${actor.name} has no skill "${String(flags["skill-name"])}". Skills: ${Object.keys(actor.stats.skills ?? {}).join(", ")}`
+            );
+          }
+          skillRaw = found[1];
+        }
+        const sanOnly = actor && skillRaw === void 0 && flags["san-loss"] !== void 0;
+        if (actor && skillRaw === void 0 && !sanOnly) {
+          throw new Error("check --actor needs --skill, --skill-name or --san-loss.");
+        }
         const skill = Number(skillRaw ?? 65);
         if (skillRaw !== void 0 && !Number.isFinite(skill)) {
           throw new Error(
@@ -2613,7 +2719,7 @@ function main() {
         const push = Boolean(flags.push);
         const difficultyRaw = String(flags.difficulty ?? "regular").toLowerCase();
         const difficulty = difficultyRaw === "hard" ? "Hard" : difficultyRaw === "extreme" ? "Extreme" : "Regular";
-        const checkRes = resolveCoC7eCheck({
+        const checkRes = sanOnly ? void 0 : resolveCoC7eCheck({
           skill,
           bonusPenaltyDice: bonus,
           difficulty,
@@ -2623,27 +2729,31 @@ function main() {
           rng
         });
         let sanRes = void 0;
-        if (flags.san !== void 0) {
-          const san = Number(flags.san);
+        if (flags.san !== void 0 || actor && flags["san-loss"] !== void 0) {
+          const san = flags.san !== void 0 ? Number(flags.san) : actor.san;
           const sanLoss = flags["san-loss"] ?? "1/1d6";
-          const intScore = Number(flags.int ?? 65);
-          sanRes = resolveCoC7eSanity(san, sanLoss, intScore, void 0, rng);
+          const intScore = Number(flags.int ?? actor?.stats.int ?? 65);
+          sanRes = resolveCoC7eSanity(san, sanLoss, intScore, actor, rng);
+          if (actor && actorState) saveWorldState(statePath2, actorState);
         }
         const payload = { system: "coc7e", difficulty, skillCheck: checkRes, sanityCheck: sanRes };
         printOutput(
           payload,
           asJson,
-          `[CoC 7e \u6AA2\u5B9A] ${checkRes.narrative}${sanRes ? `
-[CoC 7e \u7406\u667A] ${sanRes.narrative}` : ""}`
+          [checkRes && `[CoC 7e \u6AA2\u5B9A] ${checkRes.narrative}`, sanRes && `[CoC 7e \u7406\u667A] ${sanRes.narrative}`].filter(Boolean).join("\n")
         );
       } else if (system === "pbta") {
         const moveName = flags.move ?? "Hack and Slash";
         const statMod = Number(flags.mod ?? 2);
         const danger = Number(flags.danger ?? 3);
+        if (/last breath|彌留|最後一息/i.test(moveName)) {
+          const lastBreath = resolvePbtALastBreath(rng);
+          printOutput(lastBreath, asJson, `[PbtA \u6AA2\u5B9A] ${lastBreath.narrative}`);
+          break;
+        }
         const dummyState = createDefaultEncounter("pbta", seed ?? 42);
         const actor = dummyState.combatants.aria_vanguard;
-        const target = dummyState.combatants.cult_archon_boss;
-        const pbtaRes = resolvePbtAMove(actor, moveName, statMod, danger, target, "1d8+2", rng);
+        const pbtaRes = resolvePbtAMove(actor, moveName, statMod, danger, void 0, "1d8+2", rng);
         printOutput(pbtaRes, asJson, `[PbtA \u6AA2\u5B9A] ${pbtaRes.narrative}`);
       } else {
         const dc = flags.dc !== void 0 ? Number(flags.dc) : void 0;
@@ -2788,6 +2898,8 @@ ${top3Text}`
         hp: `${c.hp}/${c.maxHp}${c.tempHp ? ` (+${c.tempHp} \u81E8\u6642)` : ""}`,
         san: `${c.san}/${c.maxSan}`,
         ac: c.ac,
+        luck: c.stats.luck,
+        xp: c.stats.xp,
         pos: `(${c.position.x},${c.position.y})`,
         conditions: c.conditions,
         isAlive: c.isAlive
@@ -2810,7 +2922,7 @@ ${top3Text}`
         `\u56DE\u5408: Round ${state.round} / Turn ${state.turn} | \u4E0B\u4E00\u4F4D\u884C\u52D5\u8005: ${state.initiativeOrder[state.activeActorIndex]}`,
         `--- \u53C3\u6230\u8005\u72C0\u614B ---`,
         ...combatantSummaries.map(
-          (c) => `  [${c.faction.toUpperCase()}] ${c.name} (${c.id}): HP ${c.hp}, SAN ${c.san}, AC ${c.ac}, \u5EA7\u6A19 ${c.pos}${c.conditions.length ? ` \u72C0\u614B:[${c.conditions.join(",")}]` : ""}${!c.isAlive ? " [\u5DF2\u9663\u4EA1]" : ""}`
+          (c) => `  [${c.faction.toUpperCase()}] ${c.name} (${c.id}): HP ${c.hp}, SAN ${c.san}, AC ${c.ac}${c.luck !== void 0 ? `, Luck ${c.luck}` : ""}${c.xp !== void 0 ? `, XP ${c.xp}` : ""}, \u5EA7\u6A19 ${c.pos}${c.conditions.length ? ` \u72C0\u614B:[${c.conditions.join(",")}]` : ""}${!c.isAlive ? " [\u5DF2\u9663\u4EA1]" : ""}`
         ),
         `--- \u6709\u6548\u8A9E\u7FA9\u8A18\u61B6 (Active Semantic Facts: ${activeFacts.length}, \u5DF2\u8986\u5BEB\u6B77\u53F2\u4E8B\u5BE6: ${supersededFacts.length}) ---`,
         ...activeFacts.map((f) => `  * (${f.subject}, ${f.predicate}) => "${f.value}" [Turn ${f.turnCreated}]`),
@@ -2829,16 +2941,17 @@ Usage (cross-platform, works in bash / zsh / PowerShell / cmd):
 
 Commands:
   init       [--list] | --system <dnd5e|coc7e|pbta> --state <path> [--seed <num>] [--json]
-             --example <alias|path> [--scene <id>] --state <path>   (load bundled campaign by alias or file path; run 'init --list' to view all)
+             --example <alias|path> [--scene <id>] [--carry <prev-state>] --state <path>   (load bundled campaign by alias or file path; run 'init --list' to view all)
   roll       "<expression>" [--seed <num>] [--json]
   check      [--system <dnd5e|coc7e|pbta>] [--state <path>]
              D&D 5e generic check : --dc <num> [--mod <num>] [--mode advantage|disadvantage|normal] [--label <str>]
              CoC 7e               : --skill <0-100> [--bonus <-2..2>] [--difficulty regular|hard|extreme]
                                     [--push] [--luck <num>] [--san <num>] [--san-loss <formula>] [--int <num>]
+                                    [--actor <id> [--skill-name <name>]]  (read skill/SAN/INT from the save; SAN loss is written back)
              PbtA                 : --move <name> [--mod <num>] [--danger <1-5>]
   ai-decide  --state <path> --actor <actorId|alias> [--temperature <num>] [--seed <num>] [--json]
   step-turn  --state <path> [--actor <actorId|alias>] [--action-id <id>] [--target <actorId>] [--temperature <num>] [--json]
-  adjust     --state <path> --actor <id> [--hp +N|-N|=N] [--temp-hp N] [--san +N|-N|=N] [--luck N] [--add-condition c1,c2] [--remove-condition c1]
+  adjust     --state <path> --actor <id> [--hp +N|-N|=N]  (quote '=N' values, e.g. --hp '=10': zsh expands a bare =10) [--temp-hp N] [--san +N|-N|=N] [--luck N] [--add-condition c1,c2] [--remove-condition c1]
   fact-set   --state <path> --subject <str> --predicate <str> (--value|--object) <str> [--category <type>] [--json]
   summary    --state <path> [--json]
 
