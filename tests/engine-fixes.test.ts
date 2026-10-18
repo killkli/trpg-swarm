@@ -178,4 +178,22 @@ for (let i = 0; i < 20 && faller.hp > 0; i++) {
 assert.equal(faller.hp, 0);
 assert.equal(faller.deathSaves?.isStable, false, 'second drop resets stability');
 
+// 11. A class feature with a counter (Second Wind) is spent on use and cannot be picked again at 0.
+{
+  const world = campaignBookToWorldState(load('crimson-crypt'), 5);
+  const hero = world.combatants['player-hero'];
+  assert.equal(hero.stats.resources?.secondWind?.current, 1, 'book resource counter is imported');
+  hero.hp = 1;
+  const first = stepCombatTurn(world, 'player-hero', 0.65, 'secondwind', 'player-hero');
+  assert.equal(first.decisionReport.selectedCandidate.action.id, 'secondwind');
+  assert.equal(hero.stats.resources?.secondWind?.current, 0, 'one use spends the counter');
+  hero.hp = 1;
+  assert.throws(
+    () => stepCombatTurn(world, 'player-hero', 0.65, 'secondwind', 'player-hero'),
+    /not a legal candidate/,
+    'an exhausted feature is not a legal action'
+  );
+  assert.equal(hero.stats.resources?.secondWind?.current, 0);
+}
+
 console.log('engine-fixes: all assertions passed');

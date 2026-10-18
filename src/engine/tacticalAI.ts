@@ -419,6 +419,11 @@ export function evaluateTacticalActions(
         }
       }
 
+      // Skip class features that are used up (Second Wind, Lay on Hands, ...)
+      if (action.usesResource && (actor.stats.resources?.[action.usesResource]?.current ?? 0) <= 0) {
+        continue;
+      }
+
       // Determine valid targets for this action from `moveTo`
       let potentialTargets: (Combatant | undefined)[] = [];
       if (action.type === 'heal' || action.type === 'buff') {

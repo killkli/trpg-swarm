@@ -353,7 +353,10 @@ export function campaignBookToWorldState(book: CampaignBook, seed = 42, sceneOve
 
     const abilities = member.abilities ?? {};
     const actions: AbilityOrAction[] = (member.attacks ?? []).map(dndAttackToAction);
+    const resources: Record<string, { current: number; max: number }> = {};
     for (const [resourceName, resource] of Object.entries(member.resources ?? {})) {
+      const max = resource?.max ?? resource?.current;
+      if (max !== undefined) resources[resourceName] = { current: resource.current ?? max, max };
       if (resource && (resource.current ?? 0) > 0 && /heal|治療/i.test(resource.effect ?? '')) {
         const healMatch = (resource.effect ?? '').match(/(\d+d\d+(?:\s*[+-]\s*\d+)?)/i);
         actions.push({
@@ -362,6 +365,7 @@ export function campaignBookToWorldState(book: CampaignBook, seed = 42, sceneOve
           type: 'heal',
           range: 0,
           healFormula: healMatch?.[1] ?? '1d8+2',
+          usesResource: resourceName,
         });
       }
     }
@@ -418,6 +422,7 @@ export function campaignBookToWorldState(book: CampaignBook, seed = 42, sceneOve
         proficiencyBonus: member.proficiencyBonus ?? 2,
         skills: member.skills,
         spellSlots: Object.keys(spellSlots).length > 0 ? spellSlots : undefined,
+        resources: Object.keys(resources).length > 0 ? resources : undefined,
       },
       actions,
     });

@@ -771,6 +771,12 @@ export function stepCombatTurn(
     }
   }
 
+  if (action.usesResource) {
+    // The tactical AI never offers an exhausted feature, so the counter is positive here.
+    const resource = actor.stats.resources?.[action.usesResource];
+    if (resource) resource.current -= 1;
+  }
+
   const target = chosen.targetId ? state.combatants[chosen.targetId] : undefined;
   let resolutionNarrative = '';
 

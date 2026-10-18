@@ -57,6 +57,8 @@ export interface CharacterStats {
   immunities?: string[];
   vulnerabilities?: string[];
   spellSlots?: Record<number, { current: number; max: number }>;
+  // Per-rest class features with a counter (Second Wind, Action Surge, ...), keyed by the book's resource name.
+  resources?: Record<string, { current: number; max: number }>;
 
   // CoC 7e core attributes (1-100) & investigator resources
   siz?: number;
@@ -101,6 +103,7 @@ export interface AbilityOrAction {
   pbtaMoveName?: string;
   pbtaStat?: 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
   description?: string;
+  usesResource?: string; // key in `stats.resources`; each use costs 1 and is blocked at 0
 }
 
 export interface PersonaWeights {

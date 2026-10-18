@@ -986,6 +986,9 @@ function evaluateTacticalActions(state, actorId, temperature = 0.65, rng = getGl
           continue;
         }
       }
+      if (action.usesResource && (actor.stats.resources?.[action.usesResource]?.current ?? 0) <= 0) {
+        continue;
+      }
       let potentialTargets = [];
       if (action.type === "heal" || action.type === "buff") {
         potentialTargets = allAllies.filter(
@@ -1786,6 +1789,10 @@ function stepCombatTurn(state, overrideActorId, temperature = 0.65, preferredAct
       slot.current -= 1;
     }
   }
+  if (action.usesResource) {
+    const resource = actor.stats.resources?.[action.usesResource];
+    if (resource) resource.current -= 1;
+  }
   const target = chosen.targetId ? state.combatants[chosen.targetId] : void 0;
   let resolutionNarrative = "";
   if (action.type === "heal" && target && state.ruleSystem === "coc7e" && action.attackBonus !== void 0) {
@@ -2217,7 +2224,10 @@ function campaignBookToWorldState(book, seed = 42, sceneOverride) {
     }
     const abilities = member.abilities ?? {};
     const actions = (member.attacks ?? []).map(dndAttackToAction);
+    const resources = {};
     for (const [resourceName, resource] of Object.entries(member.resources ?? {})) {
+      const max = resource?.max ?? resource?.current;
+      if (max !== void 0) resources[resourceName] = { current: resource.current ?? max, max };
       if (resource && (resource.current ?? 0) > 0 && /heal|治療/i.test(resource.effect ?? "")) {
         const healMatch = (resource.effect ?? "").match(/(\d+d\d+(?:\s*[+-]\s*\d+)?)/i);
         actions.push({
@@ -2225,7 +2235,8 @@ function campaignBookToWorldState(book, seed = 42, sceneOverride) {
           name: resourceName,
           type: "heal",
           range: 0,
-          healFormula: healMatch?.[1] ?? "1d8+2"
+          healFormula: healMatch?.[1] ?? "1d8+2",
+          usesResource: resourceName
         });
       }
     }
@@ -2277,7 +2288,8 @@ function campaignBookToWorldState(book, seed = 42, sceneOverride) {
         cha: abilities.CHA?.score,
         proficiencyBonus: member.proficiencyBonus ?? 2,
         skills: member.skills,
-        spellSlots: Object.keys(spellSlots).length > 0 ? spellSlots : void 0
+        spellSlots: Object.keys(spellSlots).length > 0 ? spellSlots : void 0,
+        resources: Object.keys(resources).length > 0 ? resources : void 0
       },
       actions
     });
