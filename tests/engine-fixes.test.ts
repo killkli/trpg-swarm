@@ -6,7 +6,9 @@
  * Run: node --experimental-strip-types tests/engine-fixes.test.ts
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { campaignBookToWorldState } from '../src/engine/campaignImport.ts';
 import { absorbTempHp, adjustDamageForType, applyCoC7eDamage, resolveDnD5eSavingThrow } from '../src/engine/rulesEngine.ts';
 import { adjustCombatant, stepCombatTurn } from '../src/engine/stateStore.ts';
@@ -177,5 +179,13 @@ for (let i = 0; i < 20 && faller.hp > 0; i++) {
 }
 assert.equal(faller.hp, 0);
 assert.equal(faller.deathSaves?.isStable, false, 'second drop resets stability');
+
+// 11. `<command> --help` and `-h` print the usage instead of running the command with its defaults.
+const cli = fileURLToPath(new URL('../scripts/trpg-cli.ts', import.meta.url));
+for (const args of [['check', '--help'], ['check', '--help', 'x'], ['roll', '-h']]) {
+  const out = execFileSync(process.execPath, ['--experimental-strip-types', cli, ...args], { encoding: 'utf8' });
+  assert.match(out, /Usage/, `${args.join(' ')} prints the usage`);
+  assert.doesNotMatch(out, /擲出|=>/, `${args.join(' ')} does not roll`);
+}
 
 console.log('engine-fixes: all assertions passed');

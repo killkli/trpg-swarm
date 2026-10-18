@@ -2514,7 +2514,8 @@ function main() {
   if (flags.temperature !== void 0 && flags.temp === void 0) {
     flags.temp = flags.temperature;
   }
-  switch (command) {
+  const wantsHelp = flags.help !== void 0 || positionals.includes("-h");
+  switch (wantsHelp ? "help" : command) {
     case "init": {
       if (flags.list) {
         const rootDir = path3.resolve(path3.dirname(fileURLToPath(import.meta.url)), "..");

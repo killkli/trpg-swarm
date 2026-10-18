@@ -191,7 +191,10 @@ function main(): void {
     flags.temp = flags.temperature;
   }
 
-  switch (command) {
+  // `<command> --help` / `-h` prints the usage; without this the command ran with its defaults.
+  const wantsHelp = flags.help !== undefined || positionals.includes('-h');
+
+  switch (wantsHelp ? 'help' : command) {
     case 'init': {
       if (flags.list) {
         const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
